@@ -24,7 +24,7 @@ function result = main_program(cupColor, supportPath)  % Executa um ciclo para o
     refreshCamera = openCameraViewPX100(simInterface, objectInfo.image);  % Abre a janela em direto e guarda a função de atualização.
     cup = findCup(objectInfo, cupColor);  % Seleciona a deteção da cor pedida.
     grasp = cup.graspTargetBase; % Centro da pega, em metros na base do PX100.
-    placement = findPlacementPX100(simInterface, cup, supportPath);  % Associa a deteção ao copo da cena e escolhe o disco.
+    placement = findPlacementPX100(simInterface, cup, supportPath);  % Escolhe o disco a partir do XY da câmara.
     fprintf('Apoio escolhido: %s [%.4f %.4f %.4f] m.\n', ...  % Apresenta a medição ou o estado na consola.
         placement.supportPath, placement.supportTop);  % Mostra o caminho do disco e o centro da sua face superior.
 
@@ -34,7 +34,7 @@ function result = main_program(cupColor, supportPath)  % Executa um ciclo para o
 
     % Mantem a pose final visivel antes de parar a simulacao.
     refreshCamera('Posicao final');  % Atualiza a imagem após o regresso à origem.
-    fprintf('Copo pousado. A manter a pose durante %.0f segundos.\n', ...  % Apresenta a medição ou o estado na consola.
+    fprintf('Sequencia de largada concluida. A manter a pose durante %.0f segundos.\n', ...  % Apresenta a medição ou o estado na consola.
         cfg.finalHoldSeconds);  % Indica o tempo de observação da pose final.
     pause(cfg.finalHoldSeconds);  % Mantém a fase visível durante o intervalo configurado.
 

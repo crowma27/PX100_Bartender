@@ -1,5 +1,5 @@
 function placement = findPlacementPX100(simInterface, cup, supportPath)  % Define as entradas e saídas desta função.
-% Localiza os apoios fixos e associa o copo da camera a um objeto da cena.
+% Localiza os apoios fixos usando o centro do copo detetado pela câmara.
     client = simInterface.get_connection();  % Atualiza client.
     sim = client.require('sim');  % Atualiza sim.
     base = sim.getObject('/px100');  % Obtém a referência do objeto da cena.
@@ -8,10 +8,9 @@ function placement = findPlacementPX100(simInterface, cup, supportPath)  % Defin
         handles = cell2mat(handles);  % Atualiza handles.
     end  % Fim do bloco.
 
-    closestCup = inf;  % Atualiza closestCup.
     closestSupport = inf;  % Atualiza closestSupport.
     placement = struct('supportPath', '', 'supportTop', [], 'supportRadius', [], ...  % Reúne os campos numa estrutura.
-        'cupOrigin', [], 'readCupPosition', [], 'readGripperCenter', []);  % Completa os dados da instrução anterior.
+        'readGripperCenter', []);  % Completa os dados da instrução anterior.
     fingerHandles = zeros(1, 2);  % Reserva os identificadores dos dois dedos.
 
     for handle = handles(:)'  % Percorre os valores do índice handle.
@@ -20,15 +19,6 @@ function placement = findPlacementPX100(simInterface, cup, supportPath)  % Defin
             fingerHandles(1) = handle;  % Atualiza fingerHandles(1).
         elseif strcmpi(alias, 'fingerRight')  % Testa a condição sobre strcmpi, alias, fingerRight.
             fingerHandles(2) = handle;  % Atualiza fingerHandles(2).
-        elseif strcmpi(alias, 'Cup')  % Testa a condição sobre strcmpi, alias, Cup.
-            % Associa a deteção ao copo usado no alinhamento e nas verificações.
-            origin = readPosition(sim, handle, base);  % Obtém a posição no referencial da base.
-            distance = norm(origin(1:2) - cup.graspTargetBase(1:2));  % Calcula a magnitude do desvio.
-            if distance < closestCup  % Testa a condição sobre distance, closestCup.
-                closestCup = distance;  % Atualiza closestCup.
-                placement.cupOrigin = origin;  % Atualiza placement.cupOrigin.
-                placement.readCupPosition = @() readPosition(sim, handle, base);  % Obtém a posição no referencial da base.
-            end  % Fim do bloco.
         elseif strcmpi(alias, 'Disc')  % Testa a condição sobre strcmpi, alias, Disc.
             if ~isPurple(sim, handle)  % Testa a condição sobre isPurple, sim, handle.
                 continue;  % Passa à iteração seguinte.
@@ -50,9 +40,6 @@ function placement = findPlacementPX100(simInterface, cup, supportPath)  % Defin
 
     if isempty(placement.supportPath)  % Verifica se há dados do apoio para esta operação.
         error('Nao encontrei o apoio lilas pedido na cena.');  % Interrompe a execução e indica a causa.
-    end  % Fim do bloco.
-    if closestCup > 0.040  % Testa a condição sobre closestCup.
-        error('Nao consegui associar o copo detetado a um objeto Cup da cena.');  % Interrompe a execução e indica a causa.
     end  % Fim do bloco.
     if any(fingerHandles == 0)  % Testa a condição sobre any, fingerHandles.
         error('Nao encontrei as formas fingerLeft e fingerRight para alinhar a pega.');  % Interrompe a execução e indica a causa.
@@ -121,10 +108,6 @@ function [top, radius] = supportGeometry(sim, handle, base)  % Define as entrada
     end  % Fim do bloco.
     top = (pose * [(minX+maxX)/2; (minY+maxY)/2; topZ; 1])';  % Atualiza top.
     radius = min(maxX-minX, maxY-minY)/2;  % Atualiza radius.
-end  % Fim do bloco.
-
-function position = readPosition(sim, handle, base)  % Define as entradas e saídas desta função.
-    position = asRow(sim.getObjectPosition(handle, base));  % Lê a posição do objeto no referencial pedido.
 end  % Fim do bloco.
 
 function row = asRow(value)  % Define as entradas e saídas desta função.

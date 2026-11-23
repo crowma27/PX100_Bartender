@@ -10,6 +10,7 @@ function [approach, fingerPath, jointPath, graspError] = ...  % Define as entrad
 
     arm = arm_interface(simInterface, '/px100', 0);  % Atualiza arm.
     [~, links, minQ, maxQ] = arm.get_RobotCharacteristics();  % Atualiza [~, links, minQ, maxQ].
+    cameraXY = graspTarget(1:2);  % Guarda a única estimativa XY do copo.
     home = arm.get_joints();  % Guarda os ângulos iniciais para o regresso.
     approach = graspTarget + [0 0 cfg.approachClearance];  % Define o ponto de aproximação acima da pega.
     fingerPath = zeros(0, 3);  % Reserva memória inicializada a zero.
@@ -41,8 +42,8 @@ function [approach, fingerPath, jointPath, graspError] = ...  % Define as entrad
                 if ~isempty(placement)  % Verifica se há dados do apoio para esta operação.
                     % Usa a distancia real entre o centro dos dedos e o alvo da pega.
                     center = placement.readGripperCenter();  % Mede o ponto médio entre os dedos.
-                    cupNow = placement.readCupPosition();  % Lê a posição atual do copo.
-                    desired = [cupNow(1:2), graspTarget(3)];  % Usa o centro medido do copo e a altura escolhida.
+                    desired = [cameraXY, graspTarget(3)];  % XY da primeira imagem e altura conhecida.
+                    toolOffset = side - center;  % Desvio entre o alvo nominal e os dedos medidos.
                     graspTarget = side + (desired - center);  % Corrige o alvo pelo erro medido entre os dedos e o copo.
                     moveTo(graspTarget, 'A entrar com a garra aberta');  % Leva o centro dos dedos até ao alvo indicado.
                 end  % Fim do bloco.
@@ -51,16 +52,12 @@ function [approach, fingerPath, jointPath, graspError] = ...  % Define as entrad
             case 'AGARRAR'  % Executa o ramo 'AGARRAR'.
                 graspError = NaN;  % Atualiza graspError.
                 if ~isempty(placement)  % Verifica se há dados do apoio para esta operação.
-                    cupBeforeClose = placement.readCupPosition();  % Lê a posição do copo imediatamente antes de fechar.
-                    center = placement.readGripperCenter();  % Mede o ponto médio entre os dedos.
-                    graspError = norm(cupBeforeClose(1:2) - center(1:2));  % Calcula a magnitude do desvio.
-                    shift = norm(cupBeforeClose(1:2) - placement.cupOrigin(1:2));  % Mede quanto o copo deslizou antes do fecho.
-                    fprintf('Antes do fecho: copo deslocou-se %.1f mm, desvio XY na garra %.1f mm.\n', ...  % Apresenta a medição ou o estado na consola.
-                        1000*shift, 1000*graspError);  % Converte as distâncias de metros para milímetros.
-                    if shift > cfg.cupShiftTolerance || graspError > cfg.cupShiftTolerance  % Testa a condição sobre shift, cfg.cupShiftTolerance, graspError.
-                        error('O copo saiu do centro durante a aproximacao. Garra aberta.');  % Interrompe a execução e indica a causa.
-                    end  % Fim do bloco.
-                end  % Fim do bloco.
+                    center = placement.readGripperCenter();  % Mede apenas os dedos.
+                    graspError = norm(cameraXY - center(1:2));  % Erro da garra face ao alvo visual inicial.
+                    if graspError > cfg.cupShiftTolerance  % Confirma o alinhamento antes de fechar.
+                        error('A garra ficou fora do alvo medido pela camara.');
+                    end
+                end
                 arm.close_hand(cfg.gripperCloseSpeed);  % Chama arm.close_hand com os parâmetros indicados.
                 advance(cfg.stepsGripperClose, 'A fechar a garra');  % Dá tempo ao movimento e atualiza a imagem.
                 state = 'LEVANTAR';  % Define LEVANTAR como próximo estado.
@@ -70,46 +67,26 @@ function [approach, fingerPath, jointPath, graspError] = ...  % Define as entrad
                     moveTo(approach, state);  % Leva o centro dos dedos até ao alvo indicado.
                     state = 'CONCLUIDO';  % Define CONCLUIDO como próximo estado.
                 else  % Trata o caso alternativo.
-                    liftHeight = placement.supportTop(3) + cfg.transportClearance;  % Soma a altura do disco à folga de transporte.
-                    lift = graspTarget + [0 0 liftHeight];  % Eleva o alvo mantendo as coordenadas horizontais.
-                    moveTo(lift, state);  % Leva o centro dos dedos até ao alvo indicado.
-                    liftedCup = placement.readCupPosition();  % Mede a posição do copo após a subida.
-                    expectedZ = placement.cupOrigin(3) + placement.supportTop(3);  % Estima a altura da origem do copo quando assente no disco.
-                    if liftedCup(3) - expectedZ < cfg.minimumCupClearance  % Testa a condição sobre liftedCup, expectedZ, cfg.minimumCupClearance.
-                        error('O copo nao ficou suspenso. Transporte cancelado.');  % Interrompe a execução e indica a causa.
-                    end  % Fim do bloco.
+                    height = cfg.cupHeight + cfg.transportClearance;  % Subida nominal acima dos outros copos.
+                    lift = graspTarget;  % Mantém o XY da pega durante a subida.
+                    for liftStep = 1:ceil(height/0.005)  % Limita cada subida a 5 mm.
+                        lift(3) = graspTarget(3) + min(liftStep*0.005,height);  % Altura conhecida a partir da pega.
+                        moveTo(lift,state);  % Espera pela chegada das juntas.
+                    end
                     state = 'TRANSPORTAR';  % Define TRANSPORTAR como próximo estado.
                 end  % Fim do bloco.
 
             case 'TRANSPORTAR'  % Executa o ramo 'TRANSPORTAR'.
-                % Compensa a posicao do copo relativamente ao alvo da garra.
-                startAngle = atan2(lift(2), lift(1));  % Obtém o azimute da posição de pega.
-                endAngle = atan2(placement.supportTop(2), placement.supportTop(1));  % Obtém o azimute do disco na base.
-                angle = endAngle - startAngle;  % Atualiza angle.
-                rotation = [cos(angle) -sin(angle); sin(angle) cos(angle)];  % Constrói a rotação no plano da mesa.
-                offsetXY = (rotation * (liftedCup(1:2)-lift(1:2))')';  % Roda o desvio copo–garra para a orientação de entrega.
-                overSupport = [placement.supportTop(1:2)-offsetXY, lift(3)];  % Desconta o desvio para centrar o copo no disco.
+                angle = atan2(placement.supportTop(2),placement.supportTop(1)) - atan2(cameraXY(2),cameraXY(1));  % Rotação da base.
+                rotation = [cos(angle) -sin(angle); sin(angle) cos(angle)];  % Roda a correção da ferramenta.
+                overSupport = [placement.supportTop(1:2) + toolOffset(1:2)*rotation', lift(3)];  % Centra os dedos sobre o disco.
                 moveTo(overSupport, state);  % Leva o centro dos dedos até ao alvo indicado.
                 state = 'POUSAR';  % Define POUSAR como próximo estado.
 
             case 'POUSAR'  % Executa o ramo 'POUSAR'.
-                cupOverSupport = placement.readCupPosition();  % Guarda a posição antes de verificar a estabilidade.
-                advance(cfg.graspStableSteps, 'A confirmar o copo sobre o apoio');  % Dá tempo ao movimento e atualiza a imagem.
-                cupNow = placement.readCupPosition();  % Lê a posição atual do copo.
-                gap = cupNow(3) - expectedZ;  % Mede a folga vertical relativamente à posição de repouso.
-                correction = placement.supportTop(1:2) - cupNow(1:2);  % Calcula o deslocamento horizontal até ao centro do disco.
-                if gap < cfg.minimumCupClearance || ...  % Testa a condição sobre gap, cfg.minimumCupClearance.
-                        norm(cupNow-cupOverSupport) > cfg.cupShiftTolerance || ...  % Completa os dados da instrução anterior.
-                        norm(correction) > cfg.cupTrackingTolerance  % Completa os dados da instrução anterior.
-                    error('Largada cancelada: o copo perdeu altura, esta a mover-se ou esta fora do apoio.');  % Interrompe a execução e indica a causa.
-                end  % Fim do bloco.
-                drop = overSupport + [correction, min(0, cfg.releaseClearance-gap)];  % Corrige X e Y e limita a descida à folga de largada.
-                moveTo(drop, 'A descer para o apoio');  % Leva o centro dos dedos até ao alvo indicado.
-                cupNow = placement.readCupPosition();  % Lê a posição atual do copo.
-                if norm(cupNow(1:2)-placement.supportTop(1:2)) > placement.supportRadius || ...  % Testa a condição sobre norm, cupNow, placement.supportTop, placement.supportRadius.
-                        abs(cupNow(3)-expectedZ) > cfg.placementTolerance  % Completa os dados da instrução anterior.
-                    error('Largada cancelada: o copo nao chegou ao apoio.');  % Interrompe a execução e indica a causa.
-                end  % Fim do bloco.
+                drop = overSupport;  % Desce no mesmo XY do apoio.
+                drop(3) = graspTarget(3) + placement.supportTop(3) + cfg.releaseClearance;  % Mesa em Z zero.
+                moveTo(drop,'A descer para o apoio');  % Espera pelas juntas antes da abertura.
                 arm.open_hand();  % Chama arm.open_hand com os parâmetros indicados.
                 advance(cfg.stepsGripper, 'A largar o copo');  % Dá tempo ao movimento e atualiza a imagem.
                 state = 'SUBIR_APOS_LARGAR';  % Define SUBIR_APOS_LARGAR como próximo estado.
@@ -132,12 +109,6 @@ function [approach, fingerPath, jointPath, graspError] = ...  % Define as entrad
             case 'VOLTAR_A_ORIGEM'  % Executa o ramo 'VOLTAR_A_ORIGEM'.
                 moveTo([lift(1:2), retreat(3)], 'A afastar do dispensador');  % Leva o centro dos dedos até ao alvo indicado.
                 moveJoints(home, state);  % Chama moveJoints com os parâmetros indicados.
-                cupFinal = placement.readCupPosition();  % Lê a posição final para confirmar a largada.
-                if norm(cupFinal(1:2)-placement.supportTop(1:2)) > ...  % Testa a condição sobre norm, cupFinal, placement.supportTop.
-                        min(placement.supportRadius, cfg.placementTolerance) || ...  % Completa os dados da instrução anterior.
-                        abs(cupFinal(3)-expectedZ) > cfg.placementTolerance  % Completa os dados da instrução anterior.
-                    error('O copo ficou fora da posicao esperada no apoio %s.', placement.supportPath);  % Interrompe a execução e indica a causa.
-                end  % Fim do bloco.
                 state = 'CONCLUIDO';  % Define CONCLUIDO como próximo estado.
         end  % Fim do bloco.
     end  % Fim do bloco.
